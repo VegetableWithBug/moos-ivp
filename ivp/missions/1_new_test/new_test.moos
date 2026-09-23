@@ -1,0 +1,185 @@
+//-------------------------------------------------
+// FILE: new_test.moos
+//-------------------------------------------------
+
+ServerHost   = localhost
+ServerPort   = 9000
+Community    = new_test
+MOOSTimeWarp = 1
+
+// Forest Lake
+LatOrigin  = 43.825300 
+LongOrigin = -70.330400 
+
+
+// 运行/管理所有 MOOS 进程
+ProcessConfig = ANTLER
+{
+  MSBetweenLaunches = 200
+
+  Run = MOOSDB        @ NewConsole = false
+  Run = pLogger       @ NewConsole = false
+  Run = uSimMarineV22 @ NewConsole = false
+  Run = pMarinePIDV22 @ NewConsole = false
+  Run = pHelmIvP      @ NewConsole = false
+  Run = pMarineViewer	@ NewConsole = false
+  Run = uProcessWatch	@ NewConsole = false
+  Run = pNodeReporter	@ NewConsole = false
+  Run = pRealm	      @ NewConsole = false
+}
+
+// 记录 MOOS 变量到日志文件
+ProcessConfig = pLogger
+{
+  AppTick   = 8
+  CommsTick = 8
+
+  AsyncLog = true
+
+  // For variables that are published in a bundle on their 
+  // first post, explicitly declare their logging request
+  Log = IVPHELM_LIFE_EVENT @ 0 NOSYNC  // helm 生命周期事件
+  Log = REPORT @ 0 NOSYNC              // 车辆状态汇报
+  Log = BHV_SETTINGS @ 0 NOSYNC        // 行为设置/参数
+  Log = SUMMARY @ 0 NOSYNC             // 总结信息
+
+  LogAuxSrc = true                    // 记录辅助来源变量
+  WildCardLogging = true              // 启用通配日志
+  WildCardOmitPattern = *_STATUS      // 忽略 *_STATUS 类变量
+  WildCardOmitPattern = DB_VARSUMMARY // 忽略变量汇总
+  WildCardOmitPattern = DB_RWSUMMARY  // 忽略读写汇总
+  WildCardExclusionLog = true         // 记录被排除的变量
+}
+
+// 监控其他进程状态与健康
+ProcessConfig = uProcessWatch
+{
+  AppTick   = 4
+  CommsTick = 4
+
+  watch_all = true
+	nowatch   = uPokeDB*
+	nowatch   = uQueryDB*
+	nowatch   = uXMS*
+	nowatch   = uMAC*
+}
+
+// 模拟船体运动和水动力
+ProcessConfig = uSimMarineV22
+{
+  AppTick  	= 4
+  CommsTick	= 4
+
+  start_pos     = x=0, y=-20, heading=180, speed=0
+  prefix        = NAV
+  turn_rate     = 95
+  thrust_map    = 0:0, 20:1, 40:2, 60:3, 80:4, 100:5
+	turn_spd_loss = 0.4
+}
+
+// IVP 任务/行为控制器
+ProcessConfig = pHelmIvP
+{
+  AppTick    = 4
+  CommsTick  = 4
+
+  behaviors  = new_test.bhv
+  domain     = course:0:359:360
+  domain     = speed:0:4:41
+}
+
+// 速度和航向 PID 控制器
+ProcessConfig = pMarinePIDV22
+{
+  AppTick    = 20
+  CommsTick  = 20
+
+  verbose       = true          // 打印详细控制信息，便于调试
+  depth_control = false         // 不使用深度控制，当前仅控制航向和速度
+
+  // SIM_INSTABILITY = 20       // 可选：增加模拟不稳定性，便于测试控制器鲁棒性
+
+  // Yaw PID controller
+  yaw_pid_kp		 = 0.9          // 舵角偏差比例增益：偏差越大，转向反应越强
+  yaw_pid_kd		 = 0.3          // 舵角偏差变化率阻尼：减小超调和振荡
+  yaw_pid_ki		 = 0.3          // 舵角偏差积分项：用于消除持续偏差
+  yaw_pid_integral_limit = 0.07 // 积分项上限，防止积分饱和
+
+  // Speed PID controller
+  speed_pid_kp		 = 1.0          // 速度误差比例增益：速度偏差越大，推力反应越强
+  speed_pid_kd		 = 0.0          // 速度误差变化率阻尼：当前设为 0
+  speed_pid_ki		 = 0.0          // 速度误差积分项：当前关闭
+  speed_pid_integral_limit = 0.07 // 速度积分上限，防止积分饱和
+
+  //MAXIMUMS
+  maxrudder    = 100            // 最大舵角限制
+  maxthrust    = 100            // 最大推力限制
+
+  // A non-zero SPEED_FACTOR overrides use of SPEED_PID
+  // Will set DESIRED_THRUST = DESIRED_SPEED * SPEED_FACTOR
+  speed_factor = 20            // 非零时直接按速度*系数生成推力，不使用速度 PID
+}
+
+// 可视化界面，显示船、轨迹、地图
+ProcessConfig = pMarineViewer
+{
+  AppTick    = 4
+  CommsTick  = 4
+
+  tiff_file            = forrest19.tif
+
+
+  set_pan_x            = -90
+  set_pan_y            = -280
+  zoom                 = 0.65
+  vehicle_shape_scale  = 1.5
+  hash_delta           = 50
+  hash_shade           = 0.22
+  hash_viewable        = true
+
+  trails_point_size   = 1
+
+  // Appcast configuration
+  appcast_height       = 75
+  appcast_width        = 30
+  appcast_viewable     = true
+  appcast_color_scheme = indigo
+  nodes_font_size      = xlarge
+  procs_font_size      = xlarge
+  appcast_font_size    = large
+  
+  right_context[return] = DEPLOY=true
+  right_context[return] = MOOS_MANUAL_OVERRIDE=false
+  right_context[return] = RETURN=false
+
+  scope  = SUMMARY
+  scope  = RETURN
+  scope  = WPT_STAT
+  scope  = VIEW_SEGLIST
+  scope  = VIEW_POINT
+  scope  = VIEW_POLYGON
+  scope  = MVIEWER_LCLICK
+  scope  = MVIEWER_RCLICK
+
+  button_one = DEPLOY # DEPLOY=true
+  button_one = MOOS_MANUAL_OVERRIDE=false # RETURN=false
+  button_two = RETURN # RETURN=true
+  button_three = SLOWER # WPT_UPDATE=speed=1.5
+  button_four = FASTER # WPT_UPDATE=speed=3.5
+
+  action  = MENU_KEY=deploy # DEPLOY = true # RETURN = false
+  action+ = MENU_KEY=deploy # MOOS_MANUAL_OVERRIDE=false
+  action  = RETURN=true
+  action  = UPDATES_RETURN=speed=1.4
+}
+
+// 汇报船体/平台状态信息
+ProcessConfig = pNodeReporter
+{
+  AppTick    = 2
+  CommsTick	 = 2
+
+  platform_type   = kayak
+  platform_color  = yellow
+  platform_length = 4
+}

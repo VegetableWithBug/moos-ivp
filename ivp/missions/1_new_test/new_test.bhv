@@ -1,0 +1,110 @@
+//--------    FILE: new_test.bhv   -------------
+// 说明：这个文件定义了 MOOS-IvP 中的行为逻辑，控制船在任务期间的导航、返回和速度维持。
+// 这里使用了三类常见 behavior：
+// 1) BHV_Waypoint：按航点巡航
+// 2) BHV_Waypoint：在 RETURN=true 时返回原点
+// 3) BHV_ConstantSpeed：在特定条件下保持恒定速度
+
+// 任务启动前的初始状态：
+// DEPLOY = false 表示“尚未部署任务”；RETURN = false 表示“不执行返回动作”
+initialize   DEPLOY = false
+initialize   RETURN = false
+
+//----------------------------------------------
+// 任务初始化说明：
+// - 只有 DEPLOY=true 且 RETURN=false 时，船才会进入巡航模式。
+// - 到达最终状态后，设置 RETURN=true，触发返回行为。
+//----------------------------------------------
+Behavior = BHV_Waypoint
+{ 
+  name      = draw_star                 // 巡航任务名称
+  pwt       = 100                          // 行为优先级，数值越大越优先
+  condition = RETURN = false               // 仅当未处于返回状态时生效
+  condition = DEPLOY = true                // 仅当任务已部署时生效
+  endflag   = RETURN = true                // 到达目标后，设置 RETURN=true，进入返回模式
+
+  endflag   = SUMMARY=speed=$[SPEED],time=$[DUR_RUN_TIME] // 任务结束时发布任务汇总，包括速度与耗时
+
+  configflag = CRUISE_SPD = $[SPEED]      // 设置当前巡航速度
+
+  activeflag = INFO=$[OWNSHIP]            // 发布当前船体标识信息
+  activeflag = INFO=$[BHVNAME]            // 发布当前行为名称
+  activeflag = INFO=$[BHVTYPE]            // 发布当前行为类型
+
+  cycleflag = CINFO=$[OSX],$[OSY]         // 每个周期发布当前船体位置
+
+  wptflag = PREV=$(PX),$(PY)              // 发布前一个航点位置
+  wptflag = NEXT=$(NX),$(NY)              // 发布下一个航点位置
+  wptflag = TEST=$(X),$(Y)                // 发布当前测试/目标点位置
+  wptflag = OSPOS=$(OSX),$(OSY)           // 发布船体当前位置
+  wptflag_on_start = true                 // 任务开始时立即发布航点状态信息
+
+  updates    = WPT_UPDATE                 // 可接收外部更新命令，修改航点
+  perpetual  = true                       // 持续运行，不会因到达某点而停止
+
+  speed_alt = 1.2                         // 备用速度，作为主速度的替代选择
+  use_alt_speed = true                    // 启用备用速度模式
+  lead = 0                                // 前瞻距离，控制提前转向的程度
+  lead_damper = 1                         // 前瞻阻尼，减小转向振荡
+  lead_to_start = true                    // 从起点开始计算前瞻效果
+  speed = 2.0   // meters per second         // 主目标速度，单位 m/s
+  capture_line = true                     // 当接近航线时启用直线捕获逻辑
+  capture_radius = 3.0                    // 捕获半径，接近航点时认为已到达
+  slip_radius = 8.0                      // 滑移半径，超过该范围开始偏航修正
+  efficiency_measure = all                // 计算航线效率时使用全部可能指标
+  points = 0,-20:-35.3,-128.5:57.1,-61.5:-57.1,-61.5:35.3,-128.5:0,-20
+
+  order = normal                          // 以正常顺序依次遍历航点
+  repeat  = 0                             // 0 表示不重复循环巡航
+
+  visual_hints = nextpt_color=yellow      // 下一个航点以黄色显示
+  visual_hints = nextpt_vertex_size=8     // 下一个航点顶点大小
+  visual_hints = nextpt_lcolor=gray70     // 下一个航点连线颜色
+  visual_hints = vertex_color=dodger_blue, edge_color=white // 顶点颜色和边线颜色
+  visual_hints = vertex_size=5, edge_size=1 // 顶点和边线显示大小
+}
+
+//----------------------------------------------
+// 返回行为：
+// 当 RETURN=true 且 DEPLOY=true 时，船会返回指定点。
+// 这是一个单独的 waypoint 行为，用于收尾或回航。
+//----------------------------------------------
+Behavior=BHV_Waypoint
+{
+  name      = waypt_return                 // 返回行为名称
+  pwt       = 100                          // 返回行为优先级
+  condition = RETURN = true                // 仅当返回命令开启时生效
+  condition = DEPLOY = true                // 必须任务已部署
+  perpetual = true                         // 保持持续运行，直到任务结束
+  updates   = RETURN_UPDATE                // 可接受返回路径更新命令
+  endflag   = RETURN = false               // 返回完成后关闭返回标志
+  endflag   = DEPLOY = false               // 返回完成后结束部署状态
+  endflag   = MISSION = complete           // 发布任务完成标志
+
+  speed = 2.0                              // 返回时的速度，单位 m/s
+  capture_radius = 2.0                     // 返回点捕获半径
+  slip_radius = 8.0                        // 返回阶段的滑移半径
+  points = 0,-20                           // 返回目标点，坐标为 (x=0, y=-20)
+ }
+
+//----------------------------------------------
+// 恒速行为：
+// 在 SPD=true 且 DEPLOY=true 时，保持船以固定速度前进一段时间。
+// 适合做定速巡航或临时速度控制。
+//----------------------------------------------
+Behavior=BHV_ConstantSpeed
+{
+  name      = const_speed                  // 恒速行为名称
+  pwt       = 200                          // 高优先级，确保该行为优先控制速度
+  condition = SPD=true                     // 仅当 SPD=true 时启用
+  condition = DEPLOY = true                // 仅当任务已部署时启用
+  perpetual = true                         // 持续有效
+  updates   = SPEED_UPDATE                 // 可通过 SPEED_UPDATE 动态更新目标速度
+  endflag   = SPD = false                  // 结束后关闭 SPD 标志
+
+  speed = 0.5                              // 保持的速度，单位 m/s
+  duration = 10                            // 持续时间，单位秒
+  duration_reset = CONST_SPD_RESET=true     // 结束时触发重置信号，启用下一轮恒速任务
+	
+}
+
