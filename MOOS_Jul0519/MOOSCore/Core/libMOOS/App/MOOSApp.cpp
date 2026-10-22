@@ -277,153 +277,132 @@ bool CMOOSApp::Run( const std::string & sName,
                     const std::string & sMissionFile)
 {
 
-	//straight away do we want colour in this application?
-	if(m_CommandLineParser.GetFlag("--moos_no_colour"))
+    if(m_CommandLineParser.GetFlag("--moos_no_colour")) // 检查是否要求关闭终端颜色输出。
 	{
-		//std::cerr<<"turning off colour\n";
-		MOOS::ConsoleColours::Enable(false);
+        MOOS::ConsoleColours::Enable(false); // 全局关闭 MOOS 的彩色日志输出。
 	}
 
 
-	//save absolutely crucial info...
-	m_sAppName      = sName; //default
-	m_CommandLineParser.GetOption("--moos_app_name",m_sAppName);//overload
+    m_sAppName      = sName; // 保存调用者传入的应用名，作为默认值。
+    m_CommandLineParser.GetOption("--moos_app_name",m_sAppName); // 命令行参数存在时，用它覆盖默认应用名。
 
-	//but things might be overloaded
-	m_sMissionFile  = sMissionFile; //default
-	m_CommandLineParser.GetVariable("--moos_file",m_sMissionFile); //overload
+    m_sMissionFile  = sMissionFile; // 保存传入的任务文件路径，作为默认值。
+    m_CommandLineParser.GetVariable("--moos_file",m_sMissionFile); // 用 --moos_file 覆盖任务文件路径。
 
-	m_MissionReader.SetAppName(m_sAppName);
+    m_MissionReader.SetAppName(m_sAppName); // 告诉任务文件读取器当前应用名，用于读取对应配置块。
 
-	//by default we will register with our application name
-	if(m_sMOOSName.empty()) //default
-		m_sMOOSName=m_sAppName;
+    if(m_sMOOSName.empty()) // 如果尚未设置 MOOS 注册名，则默认使用应用名。
+        m_sMOOSName=m_sAppName; // 设置默认的 MOOSDB 客户端注册名。
 
-	m_CommandLineParser.GetVariable("--moos_name",m_sMOOSName); //overload
+    m_CommandLineParser.GetVariable("--moos_name",m_sMOOSName); // 用 --moos_name 覆盖 MOOS 注册名。
 
 
-	if(m_CommandLineParser.GetFlag("--moos_help"))
+    if(m_CommandLineParser.GetFlag("--moos_help")) // 如果请求标准帮助信息，则打印后退出。
 	{
-		PrintDefaultCommandLineSwitches();
-		exit(0);
+        PrintDefaultCommandLineSwitches(); // 打印 MOOSApp 支持的命令行选项。
+        exit(0); // 正常结束进程，不进入应用运行阶段。
 	}
 
-	if(m_CommandLineParser.GetFlag("--help"))
+    if(m_CommandLineParser.GetFlag("--help")) // 如果请求完整帮助信息，则打印标准和自定义帮助。
 	{
-		PrintDefaultCommandLineSwitches();
-		std::cout<<"\ncustom help:\n";
-		OnPrintHelpAndExit();
-		exit(0);
+        PrintDefaultCommandLineSwitches(); // 打印标准 MOOSApp 选项。
+        std::cout<<"\ncustom help:\n"; // 输出自定义帮助部分的标题。
+        OnPrintHelpAndExit(); // 调用派生类可重载的自定义帮助函数，通常会退出。
+        exit(0); // 若自定义帮助函数没有退出，则在这里正常结束进程。
 	}
 
-	if(m_CommandLineParser.GetFlag("--moos_print_example"))
-		OnPrintExampleAndExit();
+    if(m_CommandLineParser.GetFlag("--moos_print_example")) // 请求打印示例配置时执行示例输出并退出。
+        OnPrintExampleAndExit(); // 调用可由派生类重载的示例配置输出函数。
 
-	if(m_CommandLineParser.GetFlag("--moos_print_interface"))
-		OnPrintInterfaceAndExit();
+    if(m_CommandLineParser.GetFlag("--moos_print_interface")) // 请求打印应用接口时执行接口输出并退出。
+        OnPrintInterfaceAndExit(); // 调用可由派生类重载的接口说明函数。
 
-	if(m_CommandLineParser.GetFlag("--moos_print_version"))
-		OnPrintVersionAndExit();
-
-
+    if(m_CommandLineParser.GetFlag("--moos_print_version")) // 请求打印版本信息时输出版本并退出。
+        OnPrintVersionAndExit(); // 打印 MOOS 版本、构建时间和 Git 版本。
 
 
-	//look at mission file etc
-	if(!Configure())
+
+
+	if(!Configure()) // 读取任务文件并解析应用、通信和运行模式配置。
 	{
-		std::cerr<<"configure returned false. Quitting\n";
-		return false;
+		std::cerr<<"configure returned false. Quitting\n"; // 配置失败时输出错误信息。
+		return false; // 终止 Run()，不启动应用主循环。
 	}
 
-	//here we give users a chance to alter configurations
-	//or do more work in configuring
-	if(m_CommandLineParser.IsAvailable())
-		OnProcessCommandLine();
+	if(m_CommandLineParser.IsAvailable()) // 如果还有未处理的命令行参数，交给应用处理。
+		OnProcessCommandLine(); // 调用可由派生类重载的命令行后处理函数。
     
-	//what time did we start?
-	m_dfAppStartTime = MOOSTime();
+	m_dfAppStartTime = MOOSTime(); // 记录应用启动时间，用于运行时间和状态统计。
 
-    //can we start the communications ?
-    if(m_bUseMOOSComms)
+    if(m_bUseMOOSComms) // 根据配置决定是否启动 MOOS 通信客户端。
     {
 
-        if(!ConfigureComms())
+        if(!ConfigureComms()) // 读取服务器地址、端口和通信频率，并启动通信线程。
         {
-            return false;
+            return false; // 通信配置失败，应用无法继续启动。
         }
 
-        ///////////////////////////////////////////////////////////////
-        //OK we are going to wait for a conenction to be established
-        // this is a little harsh but it saves derived classes having to
-        // hold off connecting to the server until ready
-        // but we will only hang around for 1 second...
-        // so it is possible that notifies will fail...but very unlikely
-        // note this is not a hack! just being helpful. Ths success of an
-        // application is NOT dependent on this
-        int t = 0;
-        int dT = 50;
-        while(!m_Comms.IsConnected())
+        int t = 0; // 累计等待时间，单位为毫秒。
+        int dT = 50; // 每次检查连接状态之间暂停 50 毫秒。
+        while(!m_Comms.IsConnected()) // 在通信线程后台连接 MOOSDB 时等待连接建立。
         {
-            MOOSPause(dT);
-            t+=dT;
-            if(t>5000)
-                break;
+            MOOSPause(dT); // 暂停一小段时间，避免忙等占用 CPU。
+			t+=dT; // 累加等待时间。
+            if(t>5000) // 最多等待约 5 秒，避免启动阶段无限阻塞。
+                break; // 超时后继续启动，后续通信线程仍会自行重连。
         }
-        //give iostream time to write comms start details up to screen..this is not really necessary
-        //as the code is thread safe...it is aesthetic only
-        MOOSPause(500);
+        MOOSPause(500); // 给通信启动日志留出输出时间，仅影响显示，不影响线程安全。
     }
 
 
-    /** let derivatives do stuff before execution*/
-    if(!OnStartUpPrepare())
+    if(!OnStartUpPrepare()) // 调用派生类启动准备回调。
     {
-        MOOSTrace("Derived OnStartUpPrepare() returned false... Quitting\n");
-        return false;
+        MOOSTrace("Derived OnStartUpPrepare() returned false... Quitting\n"); // 报告启动准备失败。
+        return false; // 中止应用启动。
     }
 
-    if(!OnStartUp())
+    if(!OnStartUp()) // 调用派生类主要启动初始化回调。
     {
-        MOOSTrace("Derived OnStartUp() returned false... Quitting\n");
-        return false;
+        MOOSTrace("Derived OnStartUp() returned false... Quitting\n"); // 报告初始化失败。
+        return false; // 中止应用启动。
     }
 
 
-    if(!OnStartUpComplete())
+    if(!OnStartUpComplete()) // 调用派生类启动完成回调，执行最后的初始化工作。
     {
-        MOOSTrace("Derived OnStartUpComplete() returned false... Quitting\n");
-        return false;
+        MOOSTrace("Derived OnStartUpComplete() returned false... Quitting\n"); // 报告启动收尾失败。
+        return false; // 中止应用启动。
     }
 
-    if(m_CommandLineParser.GetFlag("--moos_configuration_audit"))
+    if(m_CommandLineParser.GetFlag("--moos_configuration_audit")) // 只审计配置参数时，不进入主循环。
     {
-        PrintSearchedConfigurationFileParameters();
-        return true;
+        PrintSearchedConfigurationFileParameters(); // 打印任务文件中实际查询过的配置项。
+        return true; // 完成审计后正常返回。
     }
 
 
-    DoBanner();
+    DoBanner(); // 输出应用启动信息和当前运行频率等摘要。
 
 
 
 
     /****************************  THE MAIN MOOS APP LOOP **********************************/
 
-    while(!m_bQuitRequested)
+    while(!m_bQuitRequested) // 持续运行，直到应用收到退出请求。
     {
-		bool bOK = DoRunWork();
+        bool bOK = DoRunWork(); // 执行一轮收邮件、内部维护和派生类 Iterate() 逻辑。
 
-		if(m_bQuitOnIterateFail && !bOK)
-			return MOOSFail("MOOSApp Exiting as requested");
+        if(m_bQuitOnIterateFail && !bOK) // 如果配置为迭代失败退出，并且本轮执行失败。
+            return MOOSFail("MOOSApp Exiting as requested"); // 输出错误并立即结束应用。
 
 
     }
 
     /***************************   END OF MOOS APP LOOP ***************************************/
 
-    m_Comms.Close();
+    m_Comms.Close(); // 退出主循环后停止通信线程并清理通信资源。
 
-    return true;
+    return true; // 应用正常退出。
 }
 
 
@@ -695,89 +674,89 @@ bool CMOOSApp::RequestQuit()
 bool CMOOSApp::DoRunWork()
 {
 
-	bool bIterateRequired = true;
+	bool bIterateRequired = true;  // 这次循环是否需要执行用户的 Iterate()，默认是需要的。
 
-	SleepAsRequired(bIterateRequired);
+	SleepAsRequired(bIterateRequired);  // 根据 AppTick/消息触发模式决定是否需要睡眠，并更新是否应执行 Iterate。
 
-	//std::cerr<<"bIterate:"<<bIterateRequired<<"\n";
+	//std::cerr<<"bIterate:"<<bIterateRequired<<"\n";  // 调试输出：输出是否要执行迭代的状态。
 
-    //store for derived class use the last time iterate was called;
-    m_dfLastRunTime = MOOSLocalTime();
+    //store for derived class use the last time iterate was called;  // 记录上一次 Iterate() 执行时刻，供派生类和计时逻辑使用。
+    m_dfLastRunTime = MOOSLocalTime();  // 设定当前本地时间为“最近一次运行时刻”。
 
-    //local vars
-    MOOSMSG_LIST MailIn;
-    if(m_bUseMOOSComms)
+    //local vars  // 定义局部变量，用于临时存储收到的 MOOS 消息。
+    MOOSMSG_LIST MailIn;  // 存放本轮从 MOOSDB 拉取到的新邮件列表。
+    if(m_bUseMOOSComms)  // 如果此应用启用了 MOOS 通信功能，再去拉取邮件并处理。
     {
-        if( m_Comms.Fetch(MailIn))
+        if( m_Comms.Fetch(MailIn))  // 从通信客户端中获取当前 inbox 中的消息；成功返回 true。
         {
-            /////////////////////////////
-            //   process mail
-            if(m_bSortMailByTime)
-                MailIn.sort(MOOSMsgTimeSorter);
+            /////////////////////////////  // 邮件处理区块。
+            //   process mail  // 处理接收到的新邮件。
+            if(m_bSortMailByTime)  // 若配置要求按时间排序消息，则按时间升序排序。
+                MailIn.sort(MOOSMsgTimeSorter);  // 将 MailIn 按 CMOOSMsg 的时间戳排序。
             
             
-            //call our own private version
-            OnNewMailPrivate(MailIn);
+            //call our own private version  // 先调用内部私有方法，负责统一处理命令消息等底层逻辑。
+            OnNewMailPrivate(MailIn);  // 执行私有的邮件处理逻辑，例如过滤命令消息。
             
-            //classes will have their own personal versions of this
-            OnNewMail(MailIn);
+            //classes will have their own personal versions of this  // 再调用派生类重写的 OnNewMail()，让应用自定义处理业务逻辑。
+            OnNewMail(MailIn);  // 调用用户/派生类定义的邮件处理回调。
             
-            m_nMailCount++;
+            m_nMailCount++;  // 统计本轮接收到了多少次新邮件。
         }
         
 
-        if(m_Comms.IsConnected() ||  CanIterateWithoutComms() )
+        if(m_Comms.IsConnected() ||  CanIterateWithoutComms() )  // 如果已连接到 MOOSDB，或者允许无通信也可继续迭代，则继续执行循环逻辑。
         {
-            //do private work
-            IteratePrivate();
+            //do private work  // 执行内部状态维护工作，比如周期性状态上报。
+            IteratePrivate();  // 调用内部私有 Iterate 逻辑，负责发送状态等后台任务。
             
-            if(bIterateRequired)
+            if(bIterateRequired)  // 只有在本轮确实需要执行应用 Iterate() 时才调用用户逻辑。
             {
-				//////////////////////////////////////
-				//  do application specific processing
+				//////////////////////////////////////  // 应用特定处理区域。
+				//  do application specific processing  // 执行用户定义的应用处理逻辑。
 
-                /** called just after Iterate has finished - another place to overload*/
-            	bool bOK = OnIteratePrepare();
-            	if(m_bQuitOnIterateFail && !bOK)
-            		return false;
+                /** called just after Iterate has finished - another place to overload*/  // 在 Iterate() 执行前调用的准备回调，供派生类重载。
+            	bool bOK = OnIteratePrepare();  // 调用派生类的迭代前准备逻辑。
+            	if(m_bQuitOnIterateFail && !bOK)  // 如果配置了“迭代失败就退出”，且返回 false，则停止应用。
+            		return false;  // 提前返回，退出 Run() 循环。
 
-				bOK = Iterate();
-				if(m_bQuitOnIterateFail && !bOK)
-					return false;
+				bOK = Iterate();  // 调用用户自定义的主循环处理函数。
+				if(m_bQuitOnIterateFail && !bOK)  // 如果 Iterate() 返回 false 且要求退出，则终止。
+					return false;  // 直接退出该轮处理并终止应用。
 
-				bOK = OnIterateComplete();
-            	if(m_bQuitOnIterateFail && !bOK)
-            		return false;
+				bOK = OnIterateComplete();  // 调用迭代结束后的收尾回调。
+            	if(m_bQuitOnIterateFail && !bOK)  // 如果收尾逻辑失败且要求退出，则立即退出。
+            		return false;  // 中止当前运行循环。
 
 
             }
             
-            m_nIterateCount++;
+            m_nIterateCount++;  // 记录本轮 Iterate 执行完成次数（或本轮循环次数）。
         }
     }
-    else
+    else  // 如果不使用 MOOS 通信，则采用简化逻辑：直接执行 Iterate()，不读取邮件。
     {
-        //do private work
-        IteratePrivate();
+        //do private work  // 执行内部辅助工作，比如状态上报。
+        IteratePrivate();  // 在无通联模式下仍执行内部状态维护逻辑。
 
-        if(bIterateRequired)
+        if(bIterateRequired)  // 如果当前应该执行 Iterate，则执行用户逻辑。
         {
-			/////////////////////////////////////////
-			//  do application specific processing
-			bool bOK = Iterate();
+			/////////////////////////////////////////  // 无通讯模式下的处理逻辑。
+			//  do application specific processing  // 执行应用主循环处理。
+			bool bOK = Iterate();  // 直接调用用户自定义的 Iterate()。
 
-			if(m_bQuitOnIterateFail && !bOK)
-				return false;
+			if(m_bQuitOnIterateFail && !bOK)  // 若设置了“迭代失败退出”，则在失败时立即返回。
+				return false;  // 返回 false 让外层 Run() 退出。
         }
         
-        m_nIterateCount++;
+        m_nIterateCount++;  // 递增迭代计数器。
     }
     
 
     
 
 
-    return true;
+    return true;  // 当前轮处理成功结束，继续下一轮循环。
     
 }
 
@@ -1118,53 +1097,46 @@ bool CMOOSApp::OnCommandMsg(CMOOSMsg /*CmdMsg*/)
 
 bool CMOOSApp::ConfigureComms()
 {
-	m_sServerHost = "LOCALHOST";
-	if(!m_CommandLineParser.GetVariable("--moos_host",m_sServerHost))
+    m_sServerHost = "LOCALHOST"; // 设置 MOOSDB 主机默认地址。
+    if(!m_CommandLineParser.GetVariable("--moos_host",m_sServerHost)) // 优先读取命令行中的服务器地址。
 	{
-		if(!m_MissionReader.GetValue("SERVERHOST",m_sServerHost))
+        if(!m_MissionReader.GetValue("SERVERHOST",m_sServerHost)) // 命令行没有提供时，再从任务文件读取 SERVERHOST。
 		{
-			//MOOSTrace("Warning Server host not read from mission file or command line: assuming %s\n",m_sServerHost.c_str());
+            // 保留默认的 LOCALHOST；未配置服务器地址不是致命错误。
 		}
 	}
 
-	m_lServerPort = 9000;
-	if(!m_CommandLineParser.GetVariable("--moos_port",m_lServerPort))
+    m_lServerPort = 9000; // 设置 MOOSDB 默认端口。
+    if(!m_CommandLineParser.GetVariable("--moos_port",m_lServerPort)) // 优先读取命令行中的服务器端口。
 	{
-		if(!m_MissionReader.GetValue("SERVERPORT",m_lServerPort))
+        if(!m_MissionReader.GetValue("SERVERPORT",m_lServerPort)) // 命令行没有提供时，再从任务文件读取 SERVERPORT。
 		{
-			//MOOSTrace("Warning Server port not read from mission file or command line: assuming %d\n",m_lServerPort);
+            // 保留默认的 9000 端口；未配置端口不是致命错误。
 		}
 	}
 
-	//this is to support an old mistake
-	//m_sServerPort shoudl never have been a string!
-	std::stringstream ss;
-	ss<<m_lServerPort;
-	m_sServerPort = ss.str();
+    std::stringstream ss; // 创建字符串流，用于将数值端口转换为字符串。
+    ss<<m_lServerPort; // 将端口号写入字符串流。
+    m_sServerPort = ss.str(); // 保存端口号的字符串形式，兼容旧接口或旧代码。
 
-    if(!CheckSetUp())
-        return false;
+    if(!CheckSetUp()) // 检查服务器地址和端口是否满足基本启动条件。
+        return false; // 配置不完整时停止通信初始化。
 
 
-    //OK now figure out our speeds etc above what is set by default
-    //in derived class constructors
-    m_MissionReader.GetConfigurationParam("COMMSTICK",m_nCommsFreq);
-    m_CommandLineParser.GetOption("--moos_comms_tick",m_nCommsFreq);
-    m_nCommsFreq = m_nCommsFreq <0 ? 1 : m_nCommsFreq;
+    m_MissionReader.GetConfigurationParam("COMMSTICK",m_nCommsFreq); // 从任务文件读取通信线程频率。
+    m_CommandLineParser.GetOption("--moos_comms_tick",m_nCommsFreq); // 命令行参数覆盖任务文件中的通信频率。
+    m_nCommsFreq = m_nCommsFreq <0 ? 1 : m_nCommsFreq; // 将负数频率纠正为最小值 1，避免无效配置。
 
-    //register a callback for On Connect
-    m_Comms.SetOnConnectCallBack(MOOSAPP_OnConnect,this);
+    m_Comms.SetOnConnectCallBack(MOOSAPP_OnConnect,this); // 注册连接成功回调，并传入当前 CMOOSApp 对象指针。
     
-    //and one for the disconnect callback
-    m_Comms.SetOnDisconnectCallBack(MOOSAPP_OnDisconnect,this);
+    m_Comms.SetOnDisconnectCallBack(MOOSAPP_OnDisconnect,this); // 注册断开连接回调，并传入当前 CMOOSApp 对象指针。
 
-    //start the comms client....
-    if(m_sMOOSName.empty())
-        m_sMOOSName = m_sAppName;
+    if(m_sMOOSName.empty()) // 如果没有单独设置 MOOS 注册名，则使用应用名。
+        m_sMOOSName = m_sAppName; // 确保客户端连接时拥有有效的注册名。
     
-    m_Comms.Run(m_sServerHost.c_str(),m_lServerPort,m_sMOOSName.c_str(),m_nCommsFreq);
+    m_Comms.Run(m_sServerHost.c_str(),m_lServerPort,m_sMOOSName.c_str(),m_nCommsFreq); // 启动通信客户端线程，异步连接 MOOSDB。
 
-    return true;
+    return true; // 通信配置和启动请求完成。
 }
 
 /** over load this if you want to do something fancy at statup...*/
@@ -1536,11 +1508,11 @@ void CMOOSApp::OnNewMailPrivate(MOOSMSG_LIST & Mail)
 
 void CMOOSApp::IteratePrivate()
 {
-    if(fabs(m_dfLastStatusTime-MOOSTime())>STATUS_PERIOD)
-    {
-        std::string sStatus = MOOSToUpper(GetAppName())+"_STATUS";
-        MOOSToUpper(sStatus);
-        m_Comms.Notify(sStatus,MakeStatusString());
-        m_dfLastStatusTime = MOOSTime();
-    }
+    if(fabs(m_dfLastStatusTime-MOOSTime())>STATUS_PERIOD)  // 若距上次状态发布时间超过 STATUS_PERIOD 秒，则生成并发布新的状态。
+    {  // 开始执行本次状态上报。
+        std::string sStatus = MOOSToUpper(GetAppName())+"_STATUS";  // 取应用名并转成大写，再追加 _STATUS 作为状态变量名。
+        MOOSToUpper(sStatus);  // 确保整个状态变量名均为大写。
+        m_Comms.Notify(sStatus,MakeStatusString());  // 生成状态文本并通过 MOOS 通信发布到数据库。
+        m_dfLastStatusTime = MOOSTime();  // 记录本次发布时间，供下次判断上报间隔。
+    }  // 状态上报判断结束；未到周期时本函数不做其他操作。
 }

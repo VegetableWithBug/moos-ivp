@@ -367,191 +367,191 @@ bool CAntler::KillNicely(MOOSProc* pProc)
 bool CAntler::Spawn(const std::string &  sMissionFile, bool bHeadless)
 {
     
-    MOOSTrace("\n\n|****** Launch ******|\n\n");
-    m_nCurrentLaunch = 0;
+    MOOSTrace("\n\n|****** Launch ******|\n\n"); // 输出本次任务启动的标题。
+    m_nCurrentLaunch = 0; // 重置当前已启动进程计数。
     
     
     //set up the mission file reader
-    if(!m_MissionReader.SetFile(sMissionFile))
-        return MOOSFail("error reading mission file\n");
+    if(!m_MissionReader.SetFile(sMissionFile)) // 尝试打开并解析指定的 MOOS 任务文件。
+        return MOOSFail("error reading mission file\n"); // 任务文件读取失败时报告错误并结束。
     
     
-    m_MissionReader.SetAppName("ANTLER"); //NB no point in running under another name...(I guess Anter1 could launch Antler2 though...)
+    m_MissionReader.SetAppName("ANTLER"); // 设置当前配置读取上下文为 ANTLER 配置块。
     
-    STRING_LIST      sParams;
+    STRING_LIST      sParams; // 保存 ANTLER 配置块中的每一行配置。
     
-    if(!m_MissionReader.GetConfiguration(  m_MissionReader.GetAppName(),sParams))
-        return MOOSFail("error reading antler config block from mission file\n");
+    if(!m_MissionReader.GetConfiguration(  m_MissionReader.GetAppName(),sParams)) // 读取任务文件中的 ANTLER 配置块。
+        return MOOSFail("error reading antler config block from mission file\n"); // 配置块读取失败时报告错误并结束。
     
     
     //fetch all the lines in teg Antler configuration block
-    STRING_LIST::iterator p;
-    sParams.reverse();
+    STRING_LIST::iterator p; // 声明配置行迭代器。
+    sParams.reverse(); // 反转配置顺序，使进程按任务文件期望的顺序启动。
     
-    int nTimeMSBetweenSpawn=DEFAULTTIMEBETWEENSPAWN;
-    m_MissionReader.GetConfigurationParam("MSBetweenLaunches",nTimeMSBetweenSpawn);
+    int nTimeMSBetweenSpawn=DEFAULTTIMEBETWEENSPAWN; // 设置进程启动之间的默认间隔。
+    m_MissionReader.GetConfigurationParam("MSBetweenLaunches",nTimeMSBetweenSpawn); // 读取任务文件指定的启动间隔。
     
     //here we'll figure out a what paths to use when looking for  executables
-    m_sDefaultExecutablePath = "SYSTEMPATH";
-    m_MissionReader.GetConfigurationParam("ExecutablePath",m_sDefaultExecutablePath);
+    m_sDefaultExecutablePath = "SYSTEMPATH"; // 默认要求从系统 PATH 查找可执行程序。
+    m_MissionReader.GetConfigurationParam("ExecutablePath",m_sDefaultExecutablePath); // 读取任务文件指定的统一可执行文件目录。
     
-    if(!MOOSStrCmp("SYSTEMPATH",m_sDefaultExecutablePath))
+    if(!MOOSStrCmp("SYSTEMPATH",m_sDefaultExecutablePath)) // 如果配置的不是 SYSTEMPATH，则使用自定义目录。
     {
         //MOOSTrace("\"ExecutablePath\" is %s\n",m_sDefaultExecutablePath.c_str());
-        if(*m_sDefaultExecutablePath.rbegin()!='/')
+        if(*m_sDefaultExecutablePath.rbegin()!='/') // 检查自定义目录末尾是否已经有路径分隔符。
         {
             //look to add extra / if needed
-            m_sDefaultExecutablePath+='/';
+            m_sDefaultExecutablePath+='/'; // 补充路径分隔符，便于后续拼接程序名。
         }
         
     }
     else
     {
         MOOSTrace("Unless directed otherwise using system path to locate binaries \n");
-        m_sDefaultExecutablePath="";
+        m_sDefaultExecutablePath=""; // 使用系统 PATH 时不再给程序名前面拼接固定目录。
     }
     
 	
 	//are we being ask to support gentle process killing?
 #ifdef _WIN32
-	m_bSupportGentleKill= false;
+    m_bSupportGentleKill= false; // Windows 版本默认关闭优雅终止功能。
 #else
-	m_bSupportGentleKill = true;
-	m_MissionReader.GetConfigurationParam("GentleKill",m_bSupportGentleKill);
+    m_bSupportGentleKill = true; // Unix 版本默认启用优雅终止功能。
+    m_MissionReader.GetConfigurationParam("GentleKill",m_bSupportGentleKill); // 读取任务文件对优雅终止功能的覆盖设置。
 #endif
 	
 	
 	
 	//no cycle through each line in the configuration block. If it begins with run then it means launch
-    for(p = sParams.begin();p!=sParams.end();p++)
+    for(p = sParams.begin();p!=sParams.end();p++) // 依次处理 ANTLER 配置块中的每一行。
     {
-        std::string sLine = *p;
+        std::string sLine = *p; // 复制当前配置行，避免直接修改配置列表内容。
         
-        std::string sWhat = MOOSChomp(sLine,"=");
+        std::string sWhat = MOOSChomp(sLine,"="); // 取出等号前的指令名，并让 sLine 保留指令参数。
         
-        if(MOOSStrCmp(sWhat,"RUN"))
+        if(MOOSStrCmp(sWhat,"RUN")) // 只处理 RUN 指令，其他配置项在这里跳过。
         {
             //OK we are being asked to run a process
             
             //try to create a process
-            MOOSProc* pNew  = CreateMOOSProcess(sLine);
+            MOOSProc* pNew  = CreateMOOSProcess(sLine); // 根据 RUN 参数解析并启动一个 MOOS 进程。
             
             if(pNew!=NULL)
             {
 				//this a really important bit of text most folk will want to see it...
-				InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET);
+                InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET); // 根据静默级别暂时控制启动成功信息的输出。
 				{
-					MOOSTrace("   [%.3d] Process: %-15s ~ %-15s launched successfully\n",
+                    MOOSTrace("   [%.3d] Process: %-15s ~ %-15s launched successfully\n", // 输出已启动进程的序号、可执行文件和 MOOS 名称。
 							  m_nCurrentLaunch,
 							  pNew->m_sApp.c_str(),
 							  pNew->m_sMOOSName.c_str());
 				}
-				InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY);
+                InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY); // 恢复原有输出抑制状态。
 				
-                m_ProcList.push_front(pNew);
-				m_nCurrentLaunch++;
-                PublishProcessLaunch(pNew->m_sApp);
+                m_ProcList.push_front(pNew); // 将新进程记录到运行中进程列表。
+				m_nCurrentLaunch++; // 更新当前已启动进程数量。
+                PublishProcessLaunch(pNew->m_sApp); // 在分布式模式下发布进程启动状态。
             }
             
 	        //wait a while
-            MOOSPause(nTimeMSBetweenSpawn);
+            MOOSPause(nTimeMSBetweenSpawn); // 按配置暂停，避免连续启动进程造成资源竞争。
             
         }
     }
     
     
     
-    if(bHeadless==false)
+    if(bHeadless==false) // 非无界面模式下，当前 Antler 可能作为分布式启动主节点。
     {
-        bool bMaster=false;
-        m_MissionReader.GetConfigurationParam("EnableDistributed",bMaster);
-        if(bMaster)
+        bool bMaster=false; // 保存是否启用分布式 Antler 的配置。
+        m_MissionReader.GetConfigurationParam("EnableDistributed",bMaster); // 读取分布式启动开关。
+        if(bMaster) // 如果当前实例是分布式启动主节点。
         {
             
-            m_MissionReader.GetValue("ServerHost",m_sDBHost);
-            m_MissionReader.GetValue("ServerPort",m_nDBPort);
+            m_MissionReader.GetValue("ServerHost",m_sDBHost); // 读取用于分布式通信的数据库主机地址。
+            m_MissionReader.GetValue("ServerPort",m_nDBPort); // 读取用于分布式通信的数据库端口。
             
             
-            if(!ConfigureMOOSComms())
-                return MOOSFail("failed to start MOOS comms");
+            if(!ConfigureMOOSComms()) // 建立 Antler 与 MOOSDB 之间的通信并发布任务信息。
+                return MOOSFail("failed to start MOOS comms"); // 通信初始化失败时结束。
             
         }
     }
     else
     {
-        m_bKillOnDBDisconnect = true;
-        m_MissionReader.GetConfigurationParam("KillOnDBDisconnect",m_bKillOnDBDisconnect);
+        m_bKillOnDBDisconnect = true; // 无界面模式默认在数据库断开时终止子进程。
+        m_MissionReader.GetConfigurationParam("KillOnDBDisconnect",m_bKillOnDBDisconnect); // 读取任务文件对该行为的覆盖设置。
     }
     
 
     
     //now wait on all our processes to close....
-    while(m_ProcList.size()!=0)
+    while(m_ProcList.size()!=0) // 只要仍有子进程未退出，就持续监视并回收它们。
     {
-        MOOSPROC_LIST::iterator q;
+        MOOSPROC_LIST::iterator q; // 声明运行中进程列表迭代器。
         
-        for(q = m_ProcList.begin();q!=m_ProcList.end();q++)
+        for(q = m_ProcList.begin();q!=m_ProcList.end();q++) // 遍历当前所有已启动进程。
         {
-            MOOSProc * pMOOSProc = *q;
+            MOOSProc * pMOOSProc = *q; // 取得当前进程信息。
             
 #ifdef _WIN32
-            if(m_bQuitCurrentJob)
+                if(m_bQuitCurrentJob) // 如果收到停止当前任务的请求，则终止当前进程。
             {
-				KillNicely(pMOOSProc);
+				KillNicely(pMOOSProc); // 使用平台相关方式请求进程优雅退出。
             }
             
             
-            pMOOSProc->pWin32Proc->vWaitForTerminate(100);
-            if(    pMOOSProc->pWin32Proc->dwGetExitCode()!=STILL_ACTIVE)
+            pMOOSProc->pWin32Proc->vWaitForTerminate(100); // 最多等待 100 毫秒检查 Windows 进程状态。
+            if(    pMOOSProc->pWin32Proc->dwGetExitCode()!=STILL_ACTIVE) // 判断 Windows 子进程是否已经退出。
             {
 
 				//this a really important bit of text most folk will want to see it...
-				InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET);
+                InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET); // 根据输出级别控制退出信息显示。
 				{
-					MOOSTrace("   [%.3d] Process: %-15s has quit\n",
+                    MOOSTrace("   [%.3d] Process: %-15s has quit\n", // 输出已退出进程的信息。
 							  --m_nCurrentLaunch,
 							  pMOOSProc->m_sApp.c_str());
 				}
-				InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY);
+                InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY); // 恢复原有输出抑制状态。
 
                 
-                PublishProcessQuit(pMOOSProc->m_sApp);
-                delete pMOOSProc->pWin32Attrib;
-                delete pMOOSProc->pWin32Proc;
-                delete pMOOSProc;
+                PublishProcessQuit(pMOOSProc->m_sApp); // 在分布式模式下发布进程退出状态。
+                delete pMOOSProc->pWin32Attrib; // 释放 Windows 进程属性对象。
+                delete pMOOSProc->pWin32Proc; // 释放 Windows 进程对象。
+                delete pMOOSProc; // 释放进程信息结构体。
                 
-                m_ProcList.erase(q);
-                break;
+                m_ProcList.erase(q); // 从运行中进程列表移除已退出进程。
+                break; // 迭代器失效后跳出循环，下一轮重新获取迭代器。
             }
 #else
-            if(m_bQuitCurrentJob)
+            if(m_bQuitCurrentJob) // Unix 下如果当前任务需要停止，则终止子进程。
             {
-                MOOSTrace("   actively killing running child %s\n",pMOOSProc->m_sApp.c_str());
-				KillNicely(pMOOSProc);
+                MOOSTrace("   actively killing running child %s\n",pMOOSProc->m_sApp.c_str()); // 输出正在终止的子进程名称。
+				KillNicely(pMOOSProc); // 向子进程发送优雅终止信号。
                 //just give it a little time - for pities sake - no need for this pause
-                MOOSPause(300);
+                MOOSPause(300); // 给进程少量时间完成退出和清理。
             }
             
             
-            int nStatus = 0;
-            if(waitpid(pMOOSProc->m_ChildPID,&nStatus,WNOHANG)>0)
+            int nStatus = 0; // 保存 waitpid 返回的子进程退出状态。
+            if(waitpid(pMOOSProc->m_ChildPID,&nStatus,WNOHANG)>0) // 非阻塞检查子进程是否已退出。
             {
 				
-				InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET);
+                InhibitMOOSTraceInThisThread(m_eVerbosity==QUIET); // 根据输出级别控制退出信息显示。
 				{
-					MOOSTrace("   [%.3d] Process: %-15s has quit\n",
+                    MOOSTrace("   [%.3d] Process: %-15s has quit\n", // 输出已退出进程的信息。
 							  --m_nCurrentLaunch,
 							  pMOOSProc->m_sApp.c_str());
 				}
-				InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY);
+                InhibitMOOSTraceInThisThread(m_eVerbosity!=CHATTY); // 恢复原有输出抑制状态。
 				
                 
-                PublishProcessQuit(pMOOSProc->m_sApp);
+                PublishProcessQuit(pMOOSProc->m_sApp); // 在分布式模式下发布进程退出状态。
                 
-                m_ProcList.erase(q);
-                break;
+                m_ProcList.erase(q); // 从运行中进程列表移除已退出进程。
+                break; // 迭代器失效后跳出循环，下一轮重新获取迭代器。
             }
-            MOOSPause(100);
+            MOOSPause(100); // 短暂等待，避免高频轮询占满 CPU。
 #endif
             
         }
@@ -560,7 +560,7 @@ bool CAntler::Spawn(const std::string &  sMissionFile, bool bHeadless)
     
 
     
-    return 0;
+    return 0; // 所有由 Antler 启动的进程均已退出，Spawn 正常完成。
     
 }
 
@@ -795,14 +795,14 @@ CAntler::MOOSProc* CAntler::CreateMOOSProcess(string sConfiguration)
     
     
     //All good up to here, now make a new process info holder stucture...
-    pNewProc = new MOOSProc;
-    pNewProc->m_sApp = sFullProcName;
-    pNewProc->m_ExtraCommandLineParameters =ExtraCommandLineParameters;
-    pNewProc->m_ConsoleLaunchParameters = sLaunchParams;
-    pNewProc->m_bInhibitMOOSParams = bInhibitMOOSParams;
-	pNewProc->m_sMOOSName = sMOOSName;
-    pNewProc->m_bNewConsole = bNewConsole;
-    pNewProc->m_sMissionFile = m_MissionReader.GetFileName();
+    pNewProc = new MOOSProc; // 在堆上创建一个进程描述对象，用于保存即将启动的进程信息。
+    pNewProc->m_sApp = sFullProcName; // 保存可执行文件的完整路径或程序名。
+    pNewProc->m_ExtraCommandLineParameters =ExtraCommandLineParameters; // 保存需要额外传给子进程的命令行参数。
+    pNewProc->m_ConsoleLaunchParameters = sLaunchParams; // 保存终端或新控制台的启动参数。
+    pNewProc->m_bInhibitMOOSParams = bInhibitMOOSParams; // 保存是否禁止传入任务文件和 MOOS 名称参数。
+	pNewProc->m_sMOOSName = sMOOSName; // 保存该进程使用的 MOOS 应用名称。
+    pNewProc->m_bNewConsole = bNewConsole; // 保存是否为该进程创建新的控制台窗口。
+    pNewProc->m_sMissionFile = m_MissionReader.GetFileName(); // 保存当前使用的任务文件名。
     
     //finally spawn each according to his own
 #ifndef _WIN32
@@ -961,66 +961,66 @@ bool CAntler::DoNixOSLaunch(CAntler::MOOSProc * pNewProc)
 {
     
     //make a child process
-    if((pNewProc->m_ChildPID = fork())<0)
+    if((pNewProc->m_ChildPID = fork())<0) // 创建子进程；返回负数表示创建失败。
     {
         //hell!
-        MOOSTrace("fork failed, not good\n");
-        return false;
+        MOOSTrace("fork failed, not good\n"); // 输出 fork 失败信息。
+        return false; // 通知调用方启动失败。
     }
-    else if(pNewProc->m_ChildPID ==0)
+    else if(pNewProc->m_ChildPID ==0) // 子进程中的 fork 返回值为 0。
     {
         //I'm the child now..
         
-        STRING_LIST::iterator p = pNewProc->m_ConsoleLaunchParameters.begin();
-	unsigned int nExecParams = pNewProc->m_ConsoleLaunchParameters.size()+pNewProc->m_ExtraCommandLineParameters.size()+ 6;
-        const char ** pExecVParams = new const char* [nExecParams];
-        int i = 0;
+        STRING_LIST::iterator p = pNewProc->m_ConsoleLaunchParameters.begin(); // 初始化终端启动参数迭代器。
+	unsigned int nExecParams = pNewProc->m_ConsoleLaunchParameters.size()+pNewProc->m_ExtraCommandLineParameters.size()+ 6; // 计算 argv 所需的最大容量。
+        const char ** pExecVParams = new const char* [nExecParams]; // 分配 execvp 所需的参数数组。
+        int i = 0; // 保存当前写入 argv 的位置。
         
         //do we need to configure an xterm?
-        if(pNewProc->m_bNewConsole)
+        if(pNewProc->m_bNewConsole) // 如果要求新控制台，则先配置终端程序。
         {
-            pExecVParams[i++] = DEFAULT_NIX_TERMINAL; 
-            if(!pNewProc->m_ConsoleLaunchParameters.empty())
+            pExecVParams[i++] = DEFAULT_NIX_TERMINAL; // 将默认 Unix 终端程序放入 argv 首项。
+            if(!pNewProc->m_ConsoleLaunchParameters.empty()) // 如果存在终端配置参数，则继续追加。
             {
-                while(p!=pNewProc->m_ConsoleLaunchParameters.end())
+                while(p!=pNewProc->m_ConsoleLaunchParameters.end()) // 遍历所有终端配置参数。
                 {
-                    pExecVParams[i++] = (p++->c_str());
+                    pExecVParams[i++] = (p++->c_str()); // 添加当前终端参数并移动迭代器。
                 }
             }
             
-            pExecVParams[i++] = "-e";
+            pExecVParams[i++] = "-e"; // 告诉终端后续参数是要执行的程序及其参数。
             
         }
         
         //here we fill in the process name we really care about
-        pExecVParams[i++] = (pNewProc->m_sApp.c_str()) ;
-        if(!pNewProc->m_bInhibitMOOSParams)
+        pExecVParams[i++] = (pNewProc->m_sApp.c_str()) ; // 添加待启动的 MOOS 可执行文件路径。
+        if(!pNewProc->m_bInhibitMOOSParams) // 未禁止时，将任务文件和 MOOS 名称传给子程序。
         {
             //we do the usual thing of supplying Mission file and MOOSName
-            pExecVParams[i++] = pNewProc->m_sMissionFile.c_str(); 
-            pExecVParams[i++] = pNewProc->m_sMOOSName.c_str(); 
+            pExecVParams[i++] = pNewProc->m_sMissionFile.c_str(); // 添加任务文件路径。
+            pExecVParams[i++] = pNewProc->m_sMOOSName.c_str(); // 添加该进程使用的 MOOS 名称。
         }
         
         
         //here we pass extra parameters to the MOOS process if required
-        for(p = pNewProc->m_ExtraCommandLineParameters.begin();p!=pNewProc->m_ExtraCommandLineParameters.end();p++)
+        for(p = pNewProc->m_ExtraCommandLineParameters.begin();p!=pNewProc->m_ExtraCommandLineParameters.end();p++) // 遍历额外命令行参数。
         {
-            pExecVParams[i++] = (p->c_str());
+            pExecVParams[i++] = (p->c_str()); // 将当前额外参数追加到 argv。
         }
         
         //terminate list
-        pExecVParams[i++] = NULL;
+        pExecVParams[i++] = NULL; // 以空指针结束 argv，满足 execvp 的接口要求。
 #if(DEBUG_LAUNCH)
-        for(int j = 0;j<i;j++)
-            MOOSTrace("argv[%d]:\"%s\"\n",j,pExecVParams[j]);
+        for(int j = 0;j<i;j++) // 调试模式下遍历并打印最终 argv。
+            MOOSTrace("argv[%d]:\"%s\"\n",j,pExecVParams[j]); // 输出每个命令行参数。
 #endif
         
         //and finally replace ourselves with a new xterm process image
-	char * const * pParamList = const_cast<char * const *> (pExecVParams);
-        if(execvp(pExecVParams[0], pParamList)==-1)
+	char * const * pParamList = const_cast<char * const *> (pExecVParams); // 转换为 execvp 要求的可写字符指针类型。
+        if(execvp(pExecVParams[0], pParamList)==-1) // 执行目标程序；成功时不会返回。
         {
-            MOOSTrace("Failed exec - not good. Called exec as follows:\n");
-            exit(EXIT_FAILURE);
+            MOOSTrace("Failed exec - not good. Called exec as follows:\n"); // 输出 exec 执行失败信息。
+            exit(EXIT_FAILURE); // 子进程无法启动目标程序时立即退出。
             
         }
         
@@ -1031,10 +1031,10 @@ bool CAntler::DoNixOSLaunch(CAntler::MOOSProc * pNewProc)
 	//does get sent to all the launched xterms. Instead we will catch ctrl-C ourself
 	//and find the MOOS process running within the sub process, signal it to die
 	//so subprocesses can clean up nicely
-	if(m_bSupportGentleKill)
-		setpgid(pNewProc->m_ChildPID,0);
+    if(m_bSupportGentleKill) // 如果启用优雅终止，则为子进程设置独立进程组。
+        setpgid(pNewProc->m_ChildPID,0); // 让后续信号可以作用于该子进程组。
     
-    return true;
+    return true; // 父进程已成功创建子进程并完成启动设置。
 }
 
 #endif

@@ -136,26 +136,26 @@ bool MOOSAsyncCommClient::Flush() {
 
 bool MOOSAsyncCommClient::Post(CMOOSMsg & Msg, bool bKeepMsgSourceName) {
 
-    if(!BASE::Post(Msg, bKeepMsgSourceName))
+    if(!BASE::Post(Msg, bKeepMsgSourceName)) // 先调用基类处理消息准备工作；失败时立即返回 false。
         return false;
 
-    m_OutLock.Lock();
+    m_OutLock.Lock(); // 加锁保护发送队列，避免其他线程同时修改队列。
     {
-        if (OutGoingQueue_.Size() > OUTBOX_PENDING_LIMIT) {
+        if (OutGoingQueue_.Size() > OUTBOX_PENDING_LIMIT) { // 队列超过待发送上限时，进入过载处理逻辑。
             std::cerr << MOOS::ConsoleColours::red() << "WARNING "
                     << MOOS::ConsoleColours::reset()
                     << "MOOSAsyncCommClient::Outbox is very full "
                         "- ditching half of the unsent mail\n";
 
-            while (OutGoingQueue_.Size() > OUTBOX_PENDING_LIMIT / 2)
-                OutGoingQueue_.Pop();
+            while (OutGoingQueue_.Size() > OUTBOX_PENDING_LIMIT / 2) // 持续丢弃队首旧消息，直到队列降至上限的一半。
+                OutGoingQueue_.Pop(); // 移除一条未发送消息，防止发送队列无限增长。
         }
-        OutGoingQueue_.AppendToMeInConstantTime(m_OutBox);
+        OutGoingQueue_.AppendToMeInConstantTime(m_OutBox); // 将基类准备好的消息批量追加到异步发送队列。
         //std::cerr<<"OutGoingQueue_ : "<<OutGoingQueue_.Size()<<"\n";
     }
-    m_OutLock.UnLock();
+    m_OutLock.UnLock(); // 完成队列操作后释放锁。
 
-    return true;
+    return true; // 消息已成功加入发送队列。
 }
 
 bool MOOSAsyncCommClient::OnCloseConnection() {
@@ -262,33 +262,34 @@ bool MOOSAsyncCommClient::WritingLoop() {
 bool MOOSAsyncCommClient::DoWriting() {
 
     //this is the IO Loop
+    // 这是一次写入线程的 I/O 处理循环：本次调用负责尽可能发送当前积累的消息。
     try {
 
-        if (!IsConnected())
+        if (!IsConnected()) // 如果当前连接已经失效，通知上层写线程进入断线处理流程。
             return false;
 
         MOOSMSG_LIST StuffToSend;
 
-        OutGoingQueue_.AppendToOtherInConstantTime(StuffToSend);
+        OutGoingQueue_.AppendToOtherInConstantTime(StuffToSend); // 将待发队列中的消息一次性转移到本地列表，减少锁竞争和逐条操作的开销。
 
         for (MOOSMSG_LIST::iterator q = StuffToSend.begin(); q
                 != StuffToSend.end(); ++q)
         {
-            if (q->IsType(MOOS_TERMINATE_CONNECTION))
+            if (q->IsType(MOOS_TERMINATE_CONNECTION)) // 终止消息是线程间传递的控制信号，不应被序列化后发送给服务器。
             {
                 //std::cerr<<"writing thread receives terminate connection request from sibling reader thread\n";
                 return false;
             }
-            m_nMsgsSent++;
+            m_nMsgsSent++; // 统计本批次中的普通待发送消息数量。
         }
 
         //and once in a while we shall send a timing
         //message (this is the new style of timing
         if ((MOOSLocalTime(false) - m_dfLastTimingMessage) > TIMING_MESSAGE_PERIOD)
         {
-            CMOOSMsg Msg(MOOS_TIMING, "_async_timing", 0.0, MOOSLocalTime());
-            StuffToSend.push_front(Msg);
-            m_dfLastTimingMessage = MOOSLocalTime(false);
+            CMOOSMsg Msg(MOOS_TIMING, "_async_timing", 0.0, MOOSLocalTime()); // 构造异步客户端专用的时间消息；消息值为 0，辅助时间字段为当前本地时间。
+            StuffToSend.push_front(Msg); // 将心跳放在队首，优先于普通业务消息发送。
+            m_dfLastTimingMessage = MOOSLocalTime(false); // 记录本次心跳发送时间，避免每次调用都重复添加心跳。
         }
 
         if (StuffToSend.empty())
@@ -301,8 +302,8 @@ bool MOOSAsyncCommClient::DoWriting() {
 
         try
         {
-            PktTx.Serialize(StuffToSend, true);
-            m_nBytesSent += PktTx.GetStreamLength();
+            PktTx.Serialize(StuffToSend, true); // 序列化消息列表；true 表示按发送方向构造数据包。
+            m_nBytesSent += PktTx.GetStreamLength(); // 用序列化后的数据包长度更新已发送字节数统计。
         }
         catch (const CMOOSException & e) {
             //clear the outbox
@@ -312,7 +313,7 @@ bool MOOSAsyncCommClient::DoWriting() {
         }
 
         //finally the send....
-        SendPkt(m_pSocket, PktTx);
+        SendPkt(m_pSocket, PktTx); // 通过当前 socket 将完整数据包发送到 MOOSDB。
 
         MonitorAndLimitWriteSpeed();
 
@@ -397,68 +398,67 @@ bool MOOSAsyncCommClient::DoReading()
 
 	try
 	{
-		CMOOSCommPkt PktRx;
+		CMOOSCommPkt PktRx; // 创建接收数据包对象，保存从 MOOSDB 读取的数据。
 
-		ReadPkt(m_pSocket,PktRx);
+		ReadPkt(m_pSocket,PktRx); // 从当前 TCP socket 阻塞读取一个完整的数据包。
 
-		m_nPktsReceived++;
+		m_nPktsReceived++; // 更新已接收的数据包数量。
 
-		m_nBytesReceived+=PktRx.GetStreamLength();
+		m_nBytesReceived+=PktRx.GetStreamLength(); // 累加本次接收的数据字节数。
 
 
-		double dfLocalRxTime =MOOSLocalTime();
+		double dfLocalRxTime =MOOSLocalTime(); // 记录本地收到数据包的时间，用于时钟偏差计算。
 
-		m_InLock.Lock();
+		m_InLock.Lock(); // 加锁保护收件箱，避免与 Fetch() 等操作并发访问 m_InBox。
 		{
-			if(m_InBox.size()>m_nInPendingLimit)
+			if(m_InBox.size()>m_nInPendingLimit) // 检查未读取消息是否超过收件箱容量上限。
 			{
-				MOOSTrace("Too many unread incoming messages [%d] : purging\n",m_InBox.size());
-				MOOSTrace("The user must read mail occasionally");
-				m_InBox.clear();
+				MOOSTrace("Too many unread incoming messages [%d] : purging\n",m_InBox.size()); // 输出收件箱溢出警告。
+				MOOSTrace("The user must read mail occasionally"); // 提醒用户及时读取邮件。
+				m_InBox.clear(); // 丢弃当前积压的未读取消息，防止内存持续增长。
 			}
 
-			//how big was inbox before we add new mail?
-			unsigned int nur = m_InBox.size();
+            //how big was inbox before we add new mail?
+            unsigned int nur = m_InBox.size(); // 记录添加当前数据包前的收件箱大小。
 
-			//extract... and please leave NULL messages there
-			PktRx.Serialize(m_InBox,false,false,NULL);
+            //extract... and please leave NULL messages there
+            PktRx.Serialize(m_InBox,false,false,NULL); // 将数据包反序列化，并把消息追加到收件箱。
 
-			m_nMsgsReceived+=m_InBox.size()-nur;
+			m_nMsgsReceived+=m_InBox.size()-nur; // 根据收件箱大小变化统计本次新增的消息数。
 
 
-			//now Serialize simply adds to the front of a list so looking
-			//at the first element allows us to check for timing information
-			//as supported by the threaded server class
+            //now Serialize simply adds to the front of a list so looking
+            //at the first element allows us to check for timing information
+            //as supported by the threaded server class
+            MOOSMSG_LIST::iterator q = m_InBox.begin(); // 从收件箱头部开始定位本次数据包的第一条消息。
+            std::advance(q,nur); // 跳过此前已有的 nur 条消息。
 
-            MOOSMSG_LIST::iterator q = m_InBox.begin();
-            std::advance(q,nur);
-
-            switch(q->GetType())
+            switch(q->GetType()) // 根据第一条新消息类型处理内部时间同步消息。
             {
                 case MOOS_TIMING:
                 {
                     //timing messages don't count in statisics
-                    m_nMsgsReceived--;
+                    m_nMsgsReceived--; // 时间同步消息不属于用户业务消息，修正接收消息统计。
+
                     //we have a fancy new DB upstream...
                     //one that supports Asynchronous Clients
-
-                    if(m_bDoLocalTimeCorrection && GetNumPktsReceived()>1)
+                    if(m_bDoLocalTimeCorrection && GetNumPktsReceived()>1) // 启用时间校正且已有足够样本时更新时钟偏差。
                     {
 
-                        UpdateMOOSSkew(q->GetTime(),
-                                q->GetDouble(),
-                                dfLocalRxTime);
+                        UpdateMOOSSkew(q->GetTime(), // 使用消息时间作为客户端侧时间参考。
+                                q->GetDouble(), // 使用消息数值作为服务器侧时间。
+                                dfLocalRxTime); // 使用本地接收时间完成偏差估计。
                     }
 
-                    if(m_bDBIsAsynchronous)
+                    if(m_bDBIsAsynchronous) // 异步 MOOSDB 可能通过该消息调整发送线程的速度。
                     {
                         //and we can update the outgoing thread's speed
                         //as controlled by the DB.
-                        m_dfOutGoingDelay = q->GetDoubleAux();
+                        m_dfOutGoingDelay = q->GetDoubleAux(); // 保存服务器下发的发送延迟。
 
                     }
 
-                    m_InBox.erase(q);
+                    m_InBox.erase(q); // 内部时间消息已处理，从用户收件箱中删除。
 
                     break;
                 }
@@ -469,17 +469,17 @@ bool MOOSAsyncCommClient::DoReading()
                     //we have no corresponding outgoing packet so not much we can
                     //do other than imagine it tooks as long to send to the
                     //DB as to receive...
-                    double dfTimeSentFromDB = m_InBox.front().GetDouble();
-                    double dfSkew = dfTimeSentFromDB-dfLocalRxTime;
-                    double dfTimeSentToDBApprox =dfTimeSentFromDB+dfSkew;
+                    double dfTimeSentFromDB = m_InBox.front().GetDouble(); // 读取旧版 MOOSDB 放在空消息中的服务器发送时间。
+                    double dfSkew = dfTimeSentFromDB-dfLocalRxTime; // 估计服务器时间与本地接收时间之间的偏差。
+                    double dfTimeSentToDBApprox =dfTimeSentFromDB+dfSkew; // 近似推算客户端发送时间。
 
-                    m_InBox.pop_front();
+                    m_InBox.pop_front(); // 删除仅用于时间同步的空消息，不交给用户处理。
 
-                    if(m_bDoLocalTimeCorrection)
+                    if(m_bDoLocalTimeCorrection) // 如果启用了本地时间校正，则更新时钟偏差。
                     {
-                        UpdateMOOSSkew(dfTimeSentToDBApprox,
-                                dfTimeSentFromDB,
-                                dfLocalRxTime);
+                        UpdateMOOSSkew(dfTimeSentToDBApprox, // 估计的客户端发送时间。
+                                dfTimeSentFromDB, // 服务器发送时间。
+                                dfLocalRxTime); // 客户端本地接收时间。
                     }
 
                     break;
@@ -487,31 +487,31 @@ bool MOOSAsyncCommClient::DoReading()
                 }
             }
 
-			DispatchInBoxToActiveThreads();
+            DispatchInBoxToActiveThreads(); // 将匹配 active queue 的业务消息分发给对应队列。
 
-			m_bMailPresent = !m_InBox.empty();
+            m_bMailPresent = !m_InBox.empty(); // 根据收件箱是否仍有用户消息更新标志。
 
 
 		}
-		m_InLock.UnLock();
+        m_InLock.UnLock(); // 释放收件箱锁，允许其他线程继续访问消息。
 
-		//and here we can optionally give users an indication
-		//that mail has arrived...
-		if(m_pfnMailCallBack!=NULL && m_bMailPresent)
+        //and here we can optionally give users an indication
+        //that mail has arrived...
+        if(m_pfnMailCallBack!=NULL && m_bMailPresent) // 有用户回调且存在邮件时通知用户。
 		{
-			bool bUserResult = (*m_pfnMailCallBack)(m_pMailCallBackParam);
+            bool bUserResult = (*m_pfnMailCallBack)(m_pMailCallBackParam); // 通过函数指针调用用户注册的邮件回调。
 			if(!bUserResult)
-				MOOSTrace("user mail callback returned false..is all ok?\n");
+                MOOSTrace("user mail callback returned false..is all ok?\n"); // 记录用户回调返回 false 的情况。
 		}
 	}
 	catch(const CMOOSException & e)
 	{
-		MOOS::DeliberatelyNotUsed(e);
-		MOOSTrace("Exception in DoReading() : %s\n",e.m_sReason);
-		return false;
+        MOOS::DeliberatelyNotUsed(e); // 明确忽略异常对象本身，避免未使用参数警告。
+        MOOSTrace("Exception in DoReading() : %s\n",e.m_sReason); // 输出读取或解析异常信息。
+        return false; // 通知 ReadingLoop() 本次读取失败，需要关闭当前连接。
 	}
 
-	return true;
+    return true; // 本次读取、解析和分发全部成功。
 }
 
 

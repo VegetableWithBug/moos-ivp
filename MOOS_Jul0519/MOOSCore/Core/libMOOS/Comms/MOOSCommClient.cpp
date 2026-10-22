@@ -361,71 +361,86 @@ bool CMOOSCommClient::WaitUntilConnected(const unsigned int nMilliseconds)
 bool CMOOSCommClient::ClientLoop()
 {
 
-
+    // 记录调试计时起点，用于输出通信循环的时间信息。
     double dfTDebug = MOOSLocalTime();
 
     if(m_bBoostIOThreads)
     {
+	    // 按配置提升当前通信线程的调度优先级或线程性能。
     	MOOS::BoostThisThread();
     }
 
+	// 外层循环负责建立连接；线程收到退出请求后结束。
 	while(!m_ClientThread.IsQuitRequested())
 	{
+		// 每次建立或重新建立连接时，重置本轮统计数据。
 		m_nBytesReceived=0;
 		m_nBytesSent=0;
 
-		//this is the connect loop...
+		// 为本轮连接创建 TCP socket。
 		m_pSocket = new XPCTcpSocket(m_lPort);
 
 
 		try
 		{
+			// 设置 socket 的接收和发送缓冲区大小，单位为字节。
 			m_pSocket->vSetRecieveBuf(m_nReceiveBufferSizeKB*1024);
 			m_pSocket->vSetSendBuf(m_nSendBufferSizeKB*1024);
 		}
 		catch(  XPCException & e)
 		{
+			// 缓冲区配置失败时记录错误，但继续尝试连接。
 			std::cerr<<"there was trouble configuring socket buffers: "<<e.sGetException()<<"\n";
 		}
 
+		// 连接 MOOSDB；连接失败时 ConnectToServer 内部会持续重试。
 		if(ConnectToServer())
 		{
 
+			// 连接成功后，重新发送需要持续保持的订阅。
 	        ApplyRecurrentSubscriptions();
 
+			// 内层循环负责当前连接上的消息收发，直到断开或请求退出。
 			while(!m_bQuit)
 			{
 
                 
                 if(m_bVerboseDebug)
                 {
+					// 输出上一次循环到当前循环的时间间隔。
 					MOOSTrace("COMMSCLIENT DEBUG: Tick period %f ms (should be %d ms)\n",MOOSLocalTime()-dfTDebug,(int)(1000.0/m_nFundamentalFreq));
                     dfTDebug = MOOSLocalTime();
                 }
                                    
+				// 执行一次完整的发送、接收和收件箱处理。
 				if(!DoClientWork())
 				{
+					// 通信失败或连接失效，跳出内层循环并准备重连。
 					break;
 				}
                 
                 if(m_bVerboseDebug)
+				{
+					// 输出本次通信处理本身耗费的时间。
                     MOOSTrace("COMMSCLIENT DEBUG: DoClientWork takes %fs\n",MOOSLocalTime()-dfTDebug);
+				}
 
-				//wait a while before contacting server again;
+				// 防止频率为零导致除零，并保证至少以 1 Hz 运行。
                 if(m_nFundamentalFreq==0)
                     m_nFundamentalFreq=1;
                 
+				// 按设定的通信频率暂停，然后开始下一次收发。
 				MOOSPause((int)(1000.0/m_nFundamentalFreq));
 
 			}
 		}
-		//wait one second before try to connect again
+		// 连接失败或断开后等待一秒，避免高速反复连接服务器。
 		MOOSPause(1000);
 
 
 	}
 
-	//clean up on exit....
+	// 外层循环结束，释放最后一次创建的 socket。
 	if(m_pSocket!=NULL)
 	{
 		if(m_pSocket)
@@ -433,11 +448,14 @@ bool CMOOSCommClient::ClientLoop()
 		m_pSocket = NULL;
 	}
 
+    // 输出线程退出信息。
     if(!m_bQuiet)
         MOOSTrace("CMOOSCommClient::ClientLoop() quits\n");
 
+	// 标记客户端当前已经不再连接到 MOOSDB。
 	m_bConnected = false;
 
+	// 返回线程工作函数结果，通知 CMOOSThread::Work() 线程已结束。
 	return true;
 }
 
@@ -1016,60 +1034,57 @@ bool CMOOSCommClient::ConnectToServer()
 to send a Msg to MOOS */
 bool CMOOSCommClient::Post(CMOOSMsg &Msg, bool bKeepMsgSourceName)
 {
-	if(!IsConnected())
-		return false;
+	if(!IsConnected())  // 如果客户端尚未连接到 MOOSDB，则无法发送消息，直接报告失败。
+		return false;  // 返回 false，调用者可据此判断消息未进入发送队列。
 
-	m_OutLock.Lock();
+	m_OutLock.Lock();  // 加锁保护发送队列，避免与通信线程并发读写 m_OutBox。
 
 	//stuff our name in here  - prevent client from having to worry about
 	//it...
 	if(!m_bFakeSource && !bKeepMsgSourceName )
 	{
-		Msg.m_sSrc = m_sMyName;
+		Msg.m_sSrc = m_sMyName;  // 将消息来源字段设为当前客户端注册名。
 	}
-	else
+	else  // 若启用了伪造来源或要求保留来源，则进入兼容处理分支。
 	{
-		if(!Msg.IsType(MOOS_NOTIFY))
+		if(!Msg.IsType(MOOS_NOTIFY))  // 非通知类型的消息仍必须携带当前客户端名称作为来源。
 		{
-			Msg.m_sSrc = m_sMyName;
+			Msg.m_sSrc = m_sMyName;  // 对这类消息强制填写当前客户端名称。
 		}
-	}
+	}  // 来源名处理结束；满足条件的 MOOS_NOTIFY 可保留其原来源。
 	
-
-	if(Msg.IsType(MOOS_SERVER_REQUEST))
+	if(Msg.IsType(MOOS_SERVER_REQUEST))  // 服务器请求使用 MOOS 约定的固定消息 ID。
 	{
-		Msg.m_nID=MOOS_SERVER_REQUEST_ID;	
+		Msg.m_nID=MOOS_SERVER_REQUEST_ID;  // 设置固定请求 ID，便于后续匹配服务器响应。
 	}
-	else 
+	else  // 普通消息使用客户端递增分配的消息 ID。
 	{
-		//set up Message ID;
-		Msg.m_nID=m_nNextMsgID++;
-	}
+		//set up Message ID;  // 为普通消息分配唯一的递增 ID。
+		Msg.m_nID=m_nNextMsgID++;  // 赋予当前 ID 后递增计数器，供下一条消息使用。
+	}  // 消息 ID 设置完成。
 
+	if(m_bPostNewestToFront)  // 若配置为新消息优先，则把消息放到发送队列头部。
+		m_OutBox.push_front(Msg);  // 将消息插入队列头部。
+	else  // 默认按先来先发的次序，把新消息放在队列尾部。
+		m_OutBox.push_back(Msg);  // 将消息追加到队列尾部。
 
-	if(m_bPostNewestToFront)
-		m_OutBox.push_front(Msg);
-	else
-		m_OutBox.push_back(Msg);
-
-	if(m_OutBox.size()>m_nOutPendingLimit)
+	if(m_OutBox.size()>m_nOutPendingLimit)  // 如果待发送消息数超过允许的队列上限，则需要丢弃一条消息。
 	{	
-        if(!m_bExpectMailBoxOverFlow)
+        if(!m_bExpectMailBoxOverFlow)  // 若没有声明预期会溢出，则先向用户输出警告。
         {
-            MOOSTrace("\nThe outbox is very full. This is suspicious and dangerous.\n");
-            MOOSTrace("\nRemoving old unsent messages as new ones are added\n");
+            MOOSTrace("\nThe outbox is very full. This is suspicious and dangerous.\n");  // 提示发送队列过满，可能存在异常。
+            MOOSTrace("\nRemoving old unsent messages as new ones are added\n");  // 提示队列满时会移除尚未发送的旧消息。
         }
-		//remove oldest message...
+		//remove oldest message...  // 根据新消息插入端，删除另一端最旧的待发送消息。
+		if(m_bPostNewestToFront)  // 新消息放在队列头部时，队列尾部保存最旧消息。
+			m_OutBox.pop_back();  // 删除队列尾部的最旧消息以维持容量上限。
+		else  // 新消息放在队列尾部时，队列头部保存最旧消息。
+			m_OutBox.pop_front();  // 删除队列头部的最旧消息以维持容量上限。
+	}  // 队列长度检查与必要的溢出处理结束。
 
-		if(m_bPostNewestToFront)
-			m_OutBox.pop_back();
-		else
-			m_OutBox.pop_front();
-	}
+	m_OutLock.UnLock();  // 解锁发送队列，让通信线程或其他调用者继续访问。
 
-	m_OutLock.UnLock();
-
-	return true;
+	return true;  // 消息已成功放入发送队列；这不表示它已经到达 MOOSDB。
 
 }
 
